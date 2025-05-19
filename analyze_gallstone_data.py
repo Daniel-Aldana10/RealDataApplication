@@ -6,6 +6,7 @@ from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.gridspec as gridspec
 from mpl_toolkits.mplot3d import Axes3D
 import warnings
+import os
 warnings.filterwarnings('ignore')
 
 # Configure visualization style
@@ -24,6 +25,36 @@ def read_excel(file_path):
         print(f"Reading file: {file_path}")
         df = pd.read_excel(file_path)
         df.columns = df.columns.str.strip()
+        
+        # Check for common variations of column names and standardize them
+        column_mapping = {
+            'Body Mass Index': 'BMI',
+            'BMI (kg/m²)': 'BMI',
+            'Body Mass Index (BMI)': 'BMI',
+            'Gallstones': 'Gallstone Status',
+            'Gallstone': 'Gallstone Status',
+            'Status': 'Gallstone Status',
+            'Total Body Fat': 'Total Body Fat Ratio (TBFR) (%)',
+            'Fat Ratio': 'Total Body Fat Ratio (TBFR) (%)',
+            'TBFR': 'Total Body Fat Ratio (TBFR) (%)',
+            'Visceral Fat': 'Visceral Fat Rating (VFR)',
+            'VFR': 'Visceral Fat Rating (VFR)',
+            'Total Chol': 'Total Cholesterol',
+            'Chol': 'Total Cholesterol',
+            'HDL': 'High Density',
+            'LDL': 'Low Density'
+        }
+        
+        # Standardize column names if matches found
+        for old_name, new_name in column_mapping.items():
+            if old_name in df.columns:
+                df.rename(columns={old_name: new_name}, inplace=True)
+        
+        # Print column names to diagnose issues
+        print("\n=== AVAILABLE COLUMNS IN DATASET ===")
+        for i, col in enumerate(df.columns):
+            print(f"{i+1}. {col}")
+        
         print("\n=== BASIC DATASET INFORMATION ===")
         print(f"Number of records: {df.shape[0]}")
         print(f"Number of columns: {df.shape[1]}")
@@ -36,6 +67,10 @@ def read_excel(file_path):
         print(missing_values[missing_values > 0])
         print("\n=== DESCRIPTIVE STATISTICS ===")
         print(df.describe())
+        
+        # Create output directory if it doesn't exist
+        os.makedirs('output', exist_ok=True)
+        
         return df
     except Exception as e:
         print(f"Error reading Excel file: {e}")
@@ -203,9 +238,18 @@ def create_improved_correlation_matrix(df):
 # =====================
 def visualize_distribution(df, variable):
     """Visualize distribution of a variable by gallstone status"""
+    # Check if the variable exists in any form
     if variable not in df.columns:
-        print(f"Variable '{variable}' not in the dataset.")
-        return
+        # Try to find similar column names
+        similar_cols = [col for col in df.columns if variable.lower() in col.lower()]
+        if similar_cols:
+            print(f"Variable '{variable}' not found exactly, but found similar columns: {similar_cols}")
+            variable = similar_cols[0]  # Use the first similar column found
+            print(f"Using column '{variable}' instead")
+        else:
+            print(f"Variable '{variable}' not in the dataset and no similar columns found.")
+            return
+    
     try:
         plt.figure(figsize=(10, 6))
         sns.histplot(data=df, x=variable, hue='Gallstone Status', kde=True,
@@ -214,10 +258,12 @@ def visualize_distribution(df, variable):
         plt.xlabel(variable)
         plt.ylabel('Frequency')
         plt.tight_layout()
-        plt.savefig(f'distribution_{variable.lower().replace(" ", "_")}.png')
+        save_path = os.path.join('output', f'distribution_{variable.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("%", "pct")}.png')
+        plt.savefig(save_path)
+        print(f"Saved distribution plot to {save_path}")
         plt.close()
     except Exception as e:
-        print(f"Error creating histogram: {e}")
+        print(f"Error creating histogram for {variable}: {e}")
 
 # =====================
 # NEW ANALYSIS FUNCTIONS
@@ -225,43 +271,106 @@ def visualize_distribution(df, variable):
 
 def analyze_bmi_vs_age(df):
     """Analyze relationship between BMI and Age by Gallstone Status"""
-    if 'BMI' in df.columns and 'Age' in df.columns and 'Gallstone Status' in df.columns:
+    # Check for BMI column
+    bmi_col = None
+    if 'BMI' in df.columns:
+        bmi_col = 'BMI'
+    else:
+        # Try to find BMI-like column
+        bmi_candidates = [col for col in df.columns if 'bmi' in col.lower() or 'mass index' in col.lower()]
+        if bmi_candidates:
+            bmi_col = bmi_candidates[0]
+            print(f"BMI column not found. Using '{bmi_col}' instead.")
+        else:
+            # If no BMI column exists, try to calculate it
+            if 'Weight' in df.columns and 'Height' in df.columns:
+                print("Calculating BMI from Weight and Height...")
+                # BMI = weight(kg) / (height(m))²
+                df['BMI'] = df['Weight'] / ((df['Height']/100) ** 2)
+                bmi_col = 'BMI'
+            else:
+                print("Cannot analyze BMI vs Age: No BMI column found and cannot calculate it.")
+                return
+    
+    # Check for Age column
+    if 'Age' not in df.columns:
+        age_candidates = [col for col in df.columns if 'age' in col.lower() or 'edad' in col.lower()]
+        if age_candidates:
+            age_col = age_candidates[0]
+            print(f"Age column not found. Using '{age_col}' instead.")
+        else:
+            print("Cannot analyze BMI vs Age: No Age column found.")
+            return
+    else:
+        age_col = 'Age'
+    
+    # Check for Gallstone Status column
+    if 'Gallstone Status' not in df.columns:
+        gs_candidates = [col for col in df.columns if 'gallstone' in col.lower() or 'status' in col.lower()]
+        if gs_candidates:
+            gs_col = gs_candidates[0]
+            print(f"Gallstone Status column not found. Using '{gs_col}' instead.")
+        else:
+            print("Cannot analyze BMI vs Age: No Gallstone Status column found.")
+            return
+    else:
+        gs_col = 'Gallstone Status'
+    
+    try:
+        # 1. BMI vs Age scatter plot
         plt.figure(figsize=(10, 6))
-        sns.scatterplot(data=df, x='Age', y='BMI', hue='Gallstone Status', palette='Set1')
+        sns.scatterplot(data=df, x=age_col, y=bmi_col, hue=gs_col, palette='Set1')
         
-        # Add a regression line for each group
-        sns.regplot(data=df[df['Gallstone Status'] == 0], x='Age', y='BMI', 
-                   scatter=False, line_kws={"linestyle": "--"})
-        sns.regplot(data=df[df['Gallstone Status'] == 1], x='Age', y='BMI', 
-                   scatter=False, line_kws={"linestyle": "-."})
+        # Add regression lines if there are enough data points
+        if len(df[df[gs_col] == 0]) > 2:
+            sns.regplot(data=df[df[gs_col] == 0], x=age_col, y=bmi_col, 
+                      scatter=False, line_kws={"linestyle": "--"})
         
-        plt.title('Relationship between BMI and Age by Gallstone Status')
-        plt.xlabel('Age')
-        plt.ylabel('BMI')
+        if len(df[df[gs_col] == 1]) > 2:
+            sns.regplot(data=df[df[gs_col] == 1], x=age_col, y=bmi_col, 
+                      scatter=False, line_kws={"linestyle": "-."})
+        
+        plt.title(f'Relationship between {bmi_col} and {age_col} by {gs_col}')
+        plt.xlabel(age_col)
+        plt.ylabel(bmi_col)
         plt.tight_layout()
-        plt.savefig('bmi_vs_age.png')
+        save_path = os.path.join('output', 'bmi_vs_age.png')
+        plt.savefig(save_path)
+        print(f"Saved BMI vs Age plot to {save_path}")
         plt.close()
         
         # Statistical analysis
-        print("\n=== BMI vs AGE CORRELATION BY GALLSTONE STATUS ===")
-        print(df[['Age', 'BMI', 'Gallstone Status']].groupby('Gallstone Status').corr())
+        print(f"\n=== {bmi_col} vs {age_col} CORRELATION BY {gs_col} ===")
+        corr_df = df[[age_col, bmi_col, gs_col]].groupby(gs_col).corr()
+        print(corr_df)
         
         # Age group analysis
-        df['Age Group'] = pd.cut(df['Age'], bins=[0, 30, 40, 50, 60, 100], 
-                              labels=['<30', '30-40', '40-50', '50-60', '60+'])
+        age_min = df[age_col].min()
+        age_max = df[age_col].max()
         
-        print("\n=== BMI BY AGE GROUP AND GALLSTONE STATUS ===")
-        print(df.groupby(['Age Group', 'Gallstone Status'])['BMI'].mean())
+        # Create age bins based on data range
+        age_bins = [age_min, age_min + (age_max-age_min)*0.2, age_min + (age_max-age_min)*0.4, 
+                    age_min + (age_max-age_min)*0.6, age_min + (age_max-age_min)*0.8, age_max]
+        age_labels = ['Very Young', 'Young', 'Middle', 'Senior', 'Elderly']
+        
+        df['Age Group'] = pd.cut(df[age_col], bins=age_bins, labels=age_labels)
+        
+        print(f"\n=== {bmi_col} BY AGE GROUP AND {gs_col} ===")
+        print(df.groupby(['Age Group', gs_col])[bmi_col].mean())
         
         # Visualize BMI by age group
         plt.figure(figsize=(12, 6))
-        sns.boxplot(data=df, x='Age Group', y='BMI', hue='Gallstone Status')
-        plt.title('BMI Distribution by Age Group and Gallstone Status')
+        sns.boxplot(data=df, x='Age Group', y=bmi_col, hue=gs_col)
+        plt.title(f'{bmi_col} Distribution by Age Group and {gs_col}')
         plt.xlabel('Age Group')
-        plt.ylabel('BMI')
+        plt.ylabel(bmi_col)
         plt.tight_layout()
-        plt.savefig('bmi_by_age_group.png')
+        save_path = os.path.join('output', 'bmi_by_age_group.png')
+        plt.savefig(save_path)
+        print(f"Saved BMI by Age Group plot to {save_path}")
         plt.close()
+    except Exception as e:
+        print(f"Error analyzing BMI vs Age: {e}")
 
 def analyze_height_weight_gender(df):
     """Analyze relationship between Height and Weight by Gender"""
@@ -389,14 +498,53 @@ def analyze_visceral_fat(df):
 
 def multi_variable_analysis(df):
     """Perform multi-variable analysis with key health indicators"""
-    # Check for key health indicators
-    health_indicators = [col for col in ['BMI', 'Total Body Fat Ratio (TBFR) (%)', 'Visceral Fat Rating (VFR)', 
-                                        'Glucose', 'Total Cholesterol', 'Triglyceride'] 
-                         if col in df.columns]
+    # Define the gallstone status column
+    gs_col = 'Gallstone Status'
+    if gs_col not in df.columns:
+        gs_candidates = [col for col in df.columns if 'gallstone' in col.lower() or 'status' in col.lower()]
+        if gs_candidates:
+            gs_col = gs_candidates[0]
+        else:
+            print("Cannot perform multi-variable analysis: No Gallstone Status column found")
+            return
     
-    if health_indicators and len(health_indicators) >= 3 and 'Gallstone Status' in df.columns:
-        # Choose up to 4 variables for 3D visualization
-        plot_vars = health_indicators[:min(4, len(health_indicators))]
+    # Find appropriate health indicators
+    potential_indicators = [
+        'BMI', 'Body Mass Index', 
+        'Total Body Fat Ratio (TBFR) (%)', 'TBFR', 'Body Fat', 
+        'Visceral Fat Rating (VFR)', 'VFR', 'Visceral Fat',
+        'Glucose', 'Blood Glucose',
+        'Total Cholesterol', 'Cholesterol',
+        'Triglyceride', 'TG',
+        'Age', 'Weight', 'Height'
+    ]
+    
+    # Find which indicators are available in the dataset
+    available_indicators = []
+    for indicator in potential_indicators:
+        if indicator in df.columns:
+            available_indicators.append(indicator)
+    
+    # Remove duplicates (e.g., if we have both 'BMI' and 'Body Mass Index')
+    unique_indicators = []
+    added_concepts = set()
+    for indicator in available_indicators:
+        # Extract the core concept
+        concept = indicator.split()[0].lower()
+        if concept not in added_concepts:
+            unique_indicators.append(indicator)
+            added_concepts.add(concept)
+    
+    print(f"Available health indicators for analysis: {unique_indicators}")
+    
+    # Need at least 3 indicators for 3D analysis
+    if len(unique_indicators) < 3 or gs_col not in df.columns:
+        print(f"Not enough indicators for 3D analysis. Found {len(unique_indicators)}: {unique_indicators}")
+        return
+    
+    try:
+        # Use up to 4 variables for visualization
+        plot_vars = unique_indicators[:min(4, len(unique_indicators))]
         
         # Create multiple 3D plots combining different variables
         from itertools import combinations
@@ -404,12 +552,16 @@ def multi_variable_analysis(df):
             fig = plt.figure(figsize=(10, 8))
             ax = fig.add_subplot(111, projection='3d')
             
-            # Plot points
-            for gs in [0, 1]:
-                subset = df[df['Gallstone Status'] == gs]
-                ax.scatter(subset[combo[0]], subset[combo[1]], subset[combo[2]], 
-                          label=f'Gallstone Status {gs}',
-                          alpha=0.7)
+            # Plot points by gallstone status
+            for gs_value in df[gs_col].unique():
+                subset = df[df[gs_col] == gs_value]
+                if not subset.empty:
+                    try:
+                        ax.scatter(subset[combo[0]], subset[combo[1]], subset[combo[2]], 
+                                  label=f'{gs_col} {gs_value}',
+                                  alpha=0.7)
+                    except Exception as e:
+                        print(f"Error plotting 3D with {combo}: {e}")
             
             ax.set_xlabel(combo[0])
             ax.set_ylabel(combo[1])
@@ -417,24 +569,33 @@ def multi_variable_analysis(df):
             plt.title(f'3D Relationship: {combo[0]} vs {combo[1]} vs {combo[2]}')
             plt.legend()
             plt.tight_layout()
-            plt.savefig(f'3d_relationship_{"_".join(c.lower().replace(" ", "_") for c in combo)}.png')
+            
+            # Create safe filename
+            safe_name = "_".join(c.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("%", "pct") for c in combo)
+            save_path = os.path.join('output', f'3d_relationship_{safe_name}.png')
+            plt.savefig(save_path)
+            print(f"Saved 3D Relationship plot to {save_path}")
             plt.close()
+    except Exception as e:
+        print(f"Error performing multi-variable analysis: {e}")
 
 # =====================
 # MAIN
 # =====================
 if __name__ == "__main__":
-    # Reemplaza 'tu_archivo.xlsx' con la ruta de tu archivo
     excel_path = 'dataset-uci.xlsx'
-
-    # Leer los datos
     data = read_excel(excel_path)
-
-    # Si los datos se cargaron correctamente
     if data is not None:
+        # Create a plots directory to store all visualizations
+        output_dir = 'output'
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"Created output directory for plots: {output_dir}")
+        
         exploratory_analysis(data)
         analyze_by_gallstone_status(data)
         create_visualizations(data)
+        
+        print("\n=== RUNNING ADVANCED ANALYSES ===")
         
         # Additional analyses
         analyze_bmi_vs_age(data)
@@ -446,23 +607,16 @@ if __name__ == "__main__":
         multi_variable_analysis(data)
         
         # Visualize distribution of key variables
+        print("\n=== GENERATING VARIABLE DISTRIBUTIONS ===")
         key_variables = ['Age', 'BMI', 'Glucose', 'Total Body Fat Ratio (TBFR) (%)', 
                          'Visceral Fat Rating (VFR)', 'Total Cholesterol', 'Triglyceride']
         for var in key_variables:
-            if var in data.columns:
-                visualize_distribution(data, var)
-                
-        print("\nAnalysis completed. The following visualizations have been generated:")
-        print("1. Categorical Variables Analysis (categorical_variables_analysis.png)")
-        print("2. Demographic Variables Analysis (demographic_variables_analysis.png)")
-        print("3. Body Composition Analysis (body_composition_analysis.png)")
-        print("4. Body Composition Correlations (body_composition_correlation.png)")
-        print("5. Correlation Matrix (general_correlation_matrix.png)")
-        print("6. BMI vs Age Analysis (bmi_vs_age.png, bmi_by_age_group.png)")
-        print("7. Height vs Weight by Gender (height_vs_weight_by_gender.png)")
-        print("8. Age by Gallstone and Gender (age_by_gallstone_and_gender.png)")
-        print("9. Clinical Variables Analysis (clinical_variables_correlation.png, clinical_variables_pairplot.png)")
-        print("10. Comorbidity Prevalence (comorbidity_prevalence.png)")
-        print("11. Visceral Fat Analysis (visceral_fat_by_gallstone.png)")
-        print("12. Multi-Variable 3D Analysis (3d_relationship_*.png)")
-        print("13. Variable Distributions (distribution_*.png)")
+            visualize_distribution(data, var)
+        
+        # List all the generated plots
+        print("\nAnalysis completed. The following visualizations have been generated in the 'output' directory:")
+        for i, filename in enumerate(sorted(os.listdir(output_dir))):
+            if filename.endswith('.png'):
+                print(f"{i+1}. {filename}")
+        
+        print("\nYou can find all visualizations in the 'output' directory.")
